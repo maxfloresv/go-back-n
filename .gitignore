@@ -1,0 +1,5 @@
+__pycache__/
+files/
+/client_bw_udp.py
+/client_T1.py
+/script.sh
