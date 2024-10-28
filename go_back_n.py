@@ -8,24 +8,27 @@ import time
 import jsockets
 import sys
 
-# Controls the maximum sequence number possible
+# Controls the maximum sequence number possible.
 MAX_SEQ_NUM = 65535
-# Controls the adaptative timeout factor (this will be multiplied with the RTT)
-TIMEOUT_FACTOR = 3
+# Controls the adaptative timeout factor (this will be multiplied with the RTT).
+TIMEOUT_FACTOR = 2
 
 mutex = threading.Lock()
 condition = threading.Condition(lock=mutex)
 timeout = 0.5
+# The minimum timeout for every packet (10% of the base timeout).
+MINIMUM_TIMEOUT = 0.1 * timeout
 
-# Primer paquete de la ventana
+# First packet of the window
 base = 0
 next_seq_num = 0
 last_ack_received = -1
-# Buffer que guarda el contenido de los paquetes
+# Saves packets' content
 buffer = {}
-# Timers de la forma [start, end] para cada paquete
+# [start, end] timers for every packet
 timers = {}
 transmission_finished = False
+last_packet_transmitted = False
 transmission_errors = 0
 reception_errors = 0
 received_bytes = 0
@@ -55,45 +58,39 @@ def receiver(s):
         if not data:
             break
         last_recv_packet = convert_from_bytes(data[:2])
-        # El receptor sólo puede aceptar si el paquete es el sucesor del último ACK recibido.
+        # Receptor thread must accept the next packet in order, and reject all other packets.
         if last_recv_packet == (last_ack_received + 1) % (MAX_SEQ_NUM + 1):
-            timers[last_recv_packet].append(time.time())
-            # Estamos recibiendo sólo un número de secuencia
-            if len(data) == 2:
-                with condition:
-                  transmission_finished = True
-                  condition.notify()
-                break
             sys.stdout.buffer.write(data[2:])
             received_bytes += len(data[2:])
-            last_ack_received = (last_ack_received + 1) % (MAX_SEQ_NUM + 1)
             with condition:
-                # Deslizamos la ventana cuando confirmamos un paquete que está contenido en ella.
-                # El invariante de Go-Back-N es ACK_n => ACK_i para todo i <= n. Para esto,
-                # hay que considerar que el último ACK recibido coincida con el último paquete recibido.
-                if (base <= last_recv_packet < next_seq_num) \
-                    or (base > next_seq_num and (base <= last_recv_packet or 0 <= last_recv_packet < next_seq_num)):
-                    base = (last_recv_packet + 1) % (MAX_SEQ_NUM + 1)
+                timers[last_recv_packet].append(time.time())
+                # This is the termination packet. It contains only the sequence number.
+                if len(data) == 2:
+                    transmission_finished = True
                     condition.notify()
-                else:
-                    # El paquete se recibió fuera de la ventana
-                    reception_errors += 1
+                    break
+                last_ack_received = last_recv_packet
+                base = (last_ack_received + 1) % (MAX_SEQ_NUM + 1)
+                condition.notify()
         else:
-            # El paquete se recibió fuera de orden dentro de la ventana
+            # Packet is out of order or outside the window.
             reception_errors += 1
                 
 def sender(s):
     """
     Sender thread in packet transmission
     """
-    global base, next_seq_num, timeout, transmission_errors
+    global base, next_seq_num, timeout, transmission_errors, last_packet_transmitted
 
     while not transmission_finished:
         with condition:
-            # Packets are emitted only while being inside the window.
-            while (next_seq_num < (base + WIN) % (MAX_SEQ_NUM + 1)) \
-                or (next_seq_num > (base + WIN) % (MAX_SEQ_NUM + 1) and (next_seq_num <= MAX_SEQ_NUM)):
+            # Packets are transmitted only while there are data to send and they are inside the window.
+            # This allows to avoid empty packet transmissions.
+            while not last_packet_transmitted and ((next_seq_num < (base + WIN) % (MAX_SEQ_NUM + 1)) \
+                or (next_seq_num > (base + WIN) % (MAX_SEQ_NUM + 1) and (next_seq_num <= MAX_SEQ_NUM))):
                 data = sys.stdin.buffer.read(PACK_SZ - 2)
+                if len(data) == 0:
+                    last_packet_transmitted = True
                 packet = convert_to_bytes(next_seq_num) + data
                 # It's not necessary to delete the old packet status. It's overwritten every time.
                 buffer[next_seq_num] = packet
@@ -108,14 +105,18 @@ def sender(s):
                 last_recv_packet = (base - 1) % (MAX_SEQ_NUM + 1)
                 [start, end] = timers[last_recv_packet]
                 RTT = end - start
-                timeout = TIMEOUT_FACTOR * RTT
+                # Implements the adaptative timeout
+                timeout = max(MINIMUM_TIMEOUT, TIMEOUT_FACTOR * RTT)
             else:
-                # Las retransmisiones pueden ocurrir más de una vez, dado que en dicho caso, next_seq_num
-                # no es modificado, entonces la condición del while de arriba sigue incumpliéndose.
+                print(f"Timeout: {timeout}", file=sys.stderr)
+                # Retransmissions can occur more than one time. If "base" is not modified, it will enter
+                # here again and again until one packet is accepted (i.e. the window slides).
                 transmission_errors += 1
+                # If base > next_seq_num, then next_seq_num exceeded the MAX_PACKET value, so we have
+                # to separate the interval [base...next_seq_num) in two: [base...MAX_PACKET] and [0...next_seq_num).
                 if base <= next_seq_num:
                     for seq in range(base, next_seq_num):
-                        # Debemos actualizar la medición del RTT por la retransmisión
+                        # This is a retransmission. We have to update the timer.
                         timers[seq][0] = time.time()
                         s.send(buffer[seq])
                 else:
@@ -147,5 +148,7 @@ recv_thread.join()
 send_thread.join()
 s.close()
 
+print(f"[DEBUG] Timeout ponderator: {TIMEOUT_FACTOR}", file=sys.stderr)
+print(f"[DEBUG] Received {received_bytes} bytes", file=sys.stderr)
 print(f"Transmission errors: {transmission_errors}", file=sys.stderr)
 print(f"Reception errors: {reception_errors}", file=sys.stderr)
