@@ -1,5 +1,6 @@
 # jsockets para Python3
 # sería bonito tener soporte para multicast
+# Author: José M. Piquer (jpiquer@dcc.uchile.cl).
 import socket
 import sys
 
