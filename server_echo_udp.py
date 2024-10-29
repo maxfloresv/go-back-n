@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 # Echo server UDP program - version of server_echo_udp.c, mono-cliente
+# Author: José M. Piquer (jpiquer@dcc.uchile.cl).
 import jsockets
 import sys
 
