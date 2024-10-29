@@ -1,9 +1,9 @@
 __pycache__/
 files/
+/server_echo2.py
+/server_echo4.py
+/server_echo5.py
+/go_back_n.zip
 /client_bw_udp.py
 /client_T1.py
-/variable_pack_size.sh
-/variable_win.sh
-/sw_vs_gbn_localhost.sh
-/sw_vs_gbn_anakena.sh
 /OUT
