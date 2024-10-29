@@ -11,7 +11,9 @@ import sys
 # Controls the maximum sequence number possible.
 MAX_SEQ_NUM = 65535
 # Controls the adaptative timeout factor (this will be multiplied with the RTT).
-TIMEOUT_FACTOR = 2
+TIMEOUT_FACTOR = 3
+# Allows to change the definition of the adaptative timeout to test transmission errors.
+TEST_TRANSMISSION_ERRORS = False
 
 mutex = threading.Lock()
 condition = threading.Condition(lock=mutex)
@@ -105,10 +107,12 @@ def sender(s):
                 last_recv_packet = (base - 1) % (MAX_SEQ_NUM + 1)
                 [start, end] = timers[last_recv_packet]
                 RTT = end - start
-                # Implements the adaptative timeout
-                timeout = max(MINIMUM_TIMEOUT, TIMEOUT_FACTOR * RTT)
+                # Implements the adaptative timeout.
+                if TEST_TRANSMISSION_ERRORS:
+                    timeout = TIMEOUT_FACTOR * RTT
+                else:
+                    timeout = max(MINIMUM_TIMEOUT, TIMEOUT_FACTOR * RTT)
             else:
-                print(f"Timeout: {timeout}", file=sys.stderr)
                 # Retransmissions can occur more than one time. If "base" is not modified, it will enter
                 # here again and again until one packet is accepted (i.e. the window slides).
                 transmission_errors += 1
@@ -148,7 +152,6 @@ recv_thread.join()
 send_thread.join()
 s.close()
 
-print(f"[DEBUG] Timeout ponderator: {TIMEOUT_FACTOR}", file=sys.stderr)
 print(f"[DEBUG] Received {received_bytes} bytes", file=sys.stderr)
 print(f"Transmission errors: {transmission_errors}", file=sys.stderr)
 print(f"Reception errors: {reception_errors}", file=sys.stderr)
